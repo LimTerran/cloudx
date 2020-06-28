@@ -1,5 +1,6 @@
 package com.cloudx.common.core.entity.auth;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import java.util.Collection;
 import java.util.Date;
 import lombok.EqualsAndHashCode;
@@ -28,15 +29,20 @@ public class AuthUser extends User {
 
   private Long userId;
   private String username;
+  @JsonIgnore
   private String password;
   private Long deptId;
+  private String deptName;
+  private String roleId;
+  private String roleName;
   private String email;
   private String mobile;
-  private Boolean status;
+  private String status;
   private Date lastLoginTime;
-  private Integer gender;
+  private String sex;
   private String avatar;
   private String description;
+  private String deptIds;
 
   public AuthUser(String username, String password, boolean enabled, boolean accountNonExpired,
       boolean credentialsNonExpired, boolean accountNonLocked,

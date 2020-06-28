@@ -70,9 +70,13 @@ public class SecurityUtil {
    * @return String 令牌内容
    */
   public static String getCurrentTokenValue() {
-    OAuth2AuthenticationDetails details = (OAuth2AuthenticationDetails) getOauth2Authentication()
-        .getDetails();
-    return details.getTokenValue();
+    try {
+      OAuth2AuthenticationDetails details = (OAuth2AuthenticationDetails) getOauth2Authentication()
+          .getDetails();
+      return details.getTokenValue();
+    } catch (Exception ignore) {
+      return null;
+    }
   }
 
   private static OAuth2Authentication getOauth2Authentication() {

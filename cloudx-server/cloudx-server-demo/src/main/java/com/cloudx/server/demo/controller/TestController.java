@@ -1,8 +1,8 @@
 package com.cloudx.server.demo.controller;
 
-import com.cloudx.common.core.base.QueryParam;
-import com.cloudx.common.core.base.R;
-import com.cloudx.common.core.entity.dto.SystemUserDTO;
+import com.cloudx.common.core.entity.QueryParam;
+import com.cloudx.common.core.entity.R;
+import com.cloudx.common.core.entity.system.SystemUser;
 import com.cloudx.common.core.exception.ApiException;
 import com.cloudx.common.core.util.HttpUtil;
 import com.cloudx.common.core.util.SecurityUtil;
@@ -10,6 +10,7 @@ import com.cloudx.server.demo.service.IUserService;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
+import javax.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -34,7 +35,7 @@ public class TestController {
    * 用于演示 Feign调用受保护的远程方法
    */
   @GetMapping("user/page")
-  public R<Map<String, Object>> pageRemoteUsers(QueryParam queryParam, SystemUserDTO user) {
+  public R<Map<String, Object>> pageRemoteUsers(QueryParam queryParam, SystemUser user) {
     if (!cut.get()) {
       cut.compareAndSet(false, true);
       throw new ApiException("测试 Feign 异常回滚");
@@ -48,7 +49,7 @@ public class TestController {
    * 获取当前用户信息
    */
   @GetMapping("user")
-  public Map<String, Object> currentUser() {
+  public Map<String, Object> currentUser(HttpServletRequest request) {
     Map<String, Object> map = new HashMap<>(5);
     map.put("currentUser", SecurityUtil.getCurrentUser());
     map.put("currentUsername", SecurityUtil.getCurrentUsername());

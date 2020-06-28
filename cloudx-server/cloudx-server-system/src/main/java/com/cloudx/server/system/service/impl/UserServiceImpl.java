@@ -1,27 +1,29 @@
 package com.cloudx.server.system.service.impl;
 
-import cn.hutool.core.collection.CollUtil;
+import cn.hutool.core.util.StrUtil;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
-import com.baomidou.mybatisplus.core.toolkit.StringPool;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
-import com.cloudx.common.core.base.QueryParam;
-import com.cloudx.common.core.constant.SystemUserConstant;
+import com.cloudx.common.core.constant.SystemConstant;
+import com.cloudx.common.core.entity.QueryParam;
 import com.cloudx.common.core.entity.auth.CurrentUser;
-import com.cloudx.common.core.entity.dto.SystemUserDTO;
 import com.cloudx.common.core.entity.system.SystemUser;
+import com.cloudx.common.core.entity.system.UserDataPermission;
 import com.cloudx.common.core.entity.system.UserRole;
+import com.cloudx.common.core.exception.ApiException;
 import com.cloudx.common.core.util.SecurityUtil;
+import com.cloudx.common.core.util.SortUtil;
 import com.cloudx.server.system.mapper.UserMapper;
+import com.cloudx.server.system.service.IUserDataPermissionService;
 import com.cloudx.server.system.service.IUserRoleService;
 import com.cloudx.server.system.service.IUserService;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Date;
 import java.util.List;
-import java.util.stream.Stream;
+import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
-import org.springframework.beans.BeanUtils;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
@@ -40,93 +42,161 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, SystemUser> impleme
 
   private final IUserRoleService userRoleService;
   private final PasswordEncoder passwordEncoder;
+  private final IUserDataPermissionService userDataPermissionService;
 
   @Override
-  public SystemUser selectByUserName(String userName) {
+  public SystemUser getSystemUser(String username) {
     LambdaQueryWrapper<SystemUser> qw = new LambdaQueryWrapper<>();
-    qw.eq(SystemUser::getUsername, userName);
+    qw.eq(SystemUser::getUsername, username);
     return getOne(qw);
   }
 
   @Override
-  public IPage<SystemUserDTO> pageSystemUser(QueryParam param, SystemUserDTO user) {
-    Page<SystemUserDTO> page = new Page<>(param.getPageNum(), param.getPageSize());
+  public IPage<SystemUser> pageSystemUser(QueryParam param, SystemUser user) {
+    Page<SystemUser> page = new Page<>(param.getPageNum(), param.getPageSize());
+    SortUtil.handlePageSort(param, page, "user_id", SystemConstant.ORDER_ASC, false);
     return baseMapper.pageSystemUserDetail(page, user);
   }
 
   @Override
-  public SystemUserDTO selectSystemUser(SystemUserDTO user) {
-    List<SystemUserDTO> result = baseMapper.selectSystemUserDetail(user);
-    return CollUtil.isNotEmpty(result) ? result.get(0) : new SystemUserDTO();
+  public void updateLoginTime(String username) {
+    SystemUser user = new SystemUser();
+    user.setLastLoginTime(new Date());
+    LambdaQueryWrapper<SystemUser> qw = new LambdaQueryWrapper<>();
+    qw.eq(SystemUser::getUsername, username);
+    baseMapper.update(user, qw);
   }
 
   @Override
   @Transactional(rollbackFor = Exception.class)
-  public void insert(SystemUserDTO user) {
-    SystemUser insertUser = new SystemUser();
-    BeanUtils.copyProperties(user, insertUser);
-    insertUser.setPassword(passwordEncoder.encode(SystemUserConstant.DEFAULT_PASSWORD))
-        .setAvatar(SystemUserConstant.DEFAULT_AVATAR)
-        .setStatus(SystemUserConstant.STATUS_VALID)
-        .setAvatar(SystemUserConstant.DEFAULT_AVATAR)
-        .setCreateTime(new Date());
-    save(insertUser);
-    // 设置角色信息
-    String[] roles = user.getRoleId().split(StringPool.COMMA);
-    setUserRoles(insertUser.getUserId(), roles);
+  public void createUser(SystemUser user) {
+    // 创建用户
+    user.setCreateTime(new Date());
+    user.setAvatar(SystemUser.DEFAULT_AVATAR);
+    user.setPassword(passwordEncoder.encode(SystemUser.DEFAULT_PASSWORD));
+    save(user);
+    // 保存用户角色
+    String[] roles = StrUtil.splitToArray(user.getRoleId(), StrUtil.C_COMMA);
+    setUserRoles(user, roles);
+    // 保存用户数据权限关联关系
+    String[] deptIds = StrUtil.splitToArray(user.getDeptIds(), StrUtil.C_COMMA);
+    setUserDataPermissions(user, deptIds);
+  }
+
+  @Override
+  public void deleteUsers(String[] userIds) {
+    // 判断是否删除数据内包含当前用户
+    if (hasCurrentUser(userIds)) {
+      throw new ApiException("不能删除当前用户");
+    }
+    List<String> list = Arrays.asList(userIds);
+    removeByIds(list);
+    // 删除用户角色
+    this.userRoleService.deleteUserRolesByUserId(userIds);
+    this.userDataPermissionService.deleteByUserIds(userIds);
   }
 
   @Override
   @Transactional(rollbackFor = Exception.class)
-  public void update(Long userId, SystemUserDTO user) {
+  public void updateUser(SystemUser user) {
     // 更新用户
-    user.setPassword(null).setUsername(null).setCreateTime(null).setUpdateTime(new Date());
-    SystemUser updateUser = new SystemUser();
-    BeanUtils.copyProperties(user, updateUser);
-    updateById(updateUser);
+    user.setPassword(null);
+    user.setUsername(null);
+    user.setCreateTime(null);
+    user.setUpdateTime(new Date());
+    updateById(user);
+    // 维护用户角色信息
+    String[] userIds = {String.valueOf(user.getUserId())};
+    userRoleService.deleteUserRolesByUserId(userIds);
+    String[] roles = StrUtil.split(user.getRoleId(), StrUtil.COMMA);
+    setUserRoles(user, roles);
+    // 维护用户数据权限信息
+    userDataPermissionService.deleteByUserIds(userIds);
+    String[] deptIds = StrUtil.split(user.getDeptIds(), StrUtil.COMMA);
+    setUserDataPermissions(user, deptIds);
+  }
 
-    // 如果有更新用户角色信息则进行
-    if (user.getRoleId() != null) {
-      LambdaQueryWrapper<UserRole> qw = new LambdaQueryWrapper<>();
-      qw.eq(UserRole::getUserId, user.getUserId());
-      userRoleService.remove(qw);
-      String[] roles = user.getRoleId().split(StringPool.COMMA);
-      setUserRoles(user.getUserId(), roles);
+  @Override
+  public List<String> getUserIdByDeptIds(String[] deptIds) {
+    return baseMapper.selectList(
+        new LambdaQueryWrapper<SystemUser>()
+            .in(SystemUser::getDeptId, String.join(",", deptIds)))
+        .stream().map(user -> String.valueOf(user.getUserId()))
+        .collect(Collectors.toList());
+  }
+
+  @Override
+  @Transactional(rollbackFor = Exception.class)
+  public void updateProfile(SystemUser user) {
+    user.setPassword(null).setUsername(null).setStatus(null);
+    if (hasCurrentUser(new String[]{String.valueOf(user.getUserId())})) {
+      updateById(user);
+    } else {
+      throw new ApiException("您无权修改别人的账号信息！");
     }
   }
 
   @Override
-  public void delete(Long userId) {
-    baseMapper.deleteById(userId);
-    LambdaQueryWrapper<UserRole> qw = new LambdaQueryWrapper<>();
-    qw.eq(UserRole::getUserId, userId);
-    userRoleService.remove(qw);
+  @Transactional(rollbackFor = Exception.class)
+  public void updateAvatar(String avatar) {
+    SystemUser user = new SystemUser().setAvatar(avatar);
+    String curUsername = SecurityUtil.getCurrentUsername();
+    this.baseMapper.update(user,
+        new LambdaQueryWrapper<SystemUser>().eq(SystemUser::getUsername, curUsername));
   }
 
-  /**
-   * 设置用户角色信息
-   *
-   * @param userId 用户ID
-   * @param roles  角色 ID 数组
-   */
-  private void setUserRoles(Long userId, String[] roles) {
-    List<UserRole> userRoles = new ArrayList<>(roles.length);
-    UserRole userRole = new UserRole(userId);
-    Stream.of(roles).forEach(roleId -> {
+  @Override
+  @Transactional(rollbackFor = Exception.class)
+  public void updatePassword(String password) {
+    SystemUser user = new SystemUser().setPassword(passwordEncoder.encode(password));
+    String curUsername = SecurityUtil.getCurrentUsername();
+    baseMapper.update(user,
+        new LambdaQueryWrapper<SystemUser>().eq(SystemUser::getUsername, curUsername));
+  }
+
+  @Override
+  @Transactional(rollbackFor = Exception.class)
+  public void resetPassword(String[] usernames) {
+    SystemUser params = new SystemUser();
+    params.setPassword(passwordEncoder.encode(SystemUser.DEFAULT_PASSWORD));
+
+    List<String> list = Arrays.asList(usernames);
+    baseMapper
+        .update(params, new LambdaQueryWrapper<SystemUser>().in(SystemUser::getUsername, list));
+
+  }
+
+  private void setUserRoles(SystemUser user, String[] roles) {
+    List<UserRole> userRoles = new ArrayList<>();
+    UserRole userRole = new UserRole();
+    userRole.setUserId(user.getUserId());
+    for (String roleId : roles) {
       userRole.setRoleId(Long.valueOf(roleId));
       userRoles.add(userRole);
-    });
+    }
     userRoleService.saveBatch(userRoles);
   }
 
-  /**
-   * 判断是否为当前用户
-   *
-   * @param id 用户ID
-   * @return true / false
-   */
-  private boolean isCurrentUser(Long id) {
+  private void setUserDataPermissions(SystemUser user, String[] deptIds) {
+    List<UserDataPermission> userDataPermissions = new ArrayList<>();
+    UserDataPermission permission = new UserDataPermission();
+    permission.setUserId(user.getUserId());
+    for (String deptId : deptIds) {
+      permission.setDeptId(Long.valueOf(deptId));
+      userDataPermissions.add(permission);
+    }
+    userDataPermissionService.saveBatch(userDataPermissions);
+  }
+
+  private boolean hasCurrentUser(String[] userIds) {
     CurrentUser cur = SecurityUtil.getCurrentUser();
-    return cur != null && cur.getUserId().equals(id);
+    if (cur != null) {
+      for (String userId : userIds) {
+        if (String.valueOf(cur.getUserId()).equals(userId)) {
+          return true;
+        }
+      }
+    }
+    return false;
   }
 }
